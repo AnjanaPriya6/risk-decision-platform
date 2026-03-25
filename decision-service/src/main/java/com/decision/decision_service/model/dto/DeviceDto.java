@@ -1,8 +1,7 @@
-package model.dto;
+package com.decision.decision_service.model.dto;
 
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -13,13 +12,12 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class UserDto {
+public class DeviceDto {
 
     @NotBlank
     @Size(max = 100)
-    private String user_id;
+    private String device_id;
 
-    @Min(0)
-    @Max(36500)
-    private Integer account_age_days;
+    @NotNull
+    private Boolean is_new_device;
 }

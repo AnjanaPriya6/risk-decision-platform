@@ -1,4 +1,4 @@
-package model.dto;
+package com.decision.decision_service.model.dto;
 
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;

@@ -1,4 +1,4 @@
-package model.enums;
+package com.decision.decision_service.model.enums;
 
 
 import com.fasterxml.jackson.annotation.JsonCreator;

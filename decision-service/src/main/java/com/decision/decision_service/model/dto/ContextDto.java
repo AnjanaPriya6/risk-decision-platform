@@ -1,4 +1,4 @@
-package model.dto;
+package com.decision.decision_service.model.dto;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -9,7 +9,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import model.enums.ChannelType;
+import com.decision.decision_service.model.enums.ChannelType;
 
 import java.time.Instant;
 
@@ -21,7 +21,7 @@ public class ContextDto {
     @NotNull
     private Instant timestamp;
 
-    @NotBlank
+    @NotNull
     private ChannelType channel;
 
     @NotBlank
