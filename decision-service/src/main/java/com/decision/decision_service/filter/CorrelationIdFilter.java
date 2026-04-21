@@ -1,24 +1,63 @@
 package com.decision.decision_service.filter;
 
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import java.io.IOException;
+import java.util.UUID;
+
 @Slf4j
 @Component
 @Order(1)
-public class CorrealationIdFilter extends OncePerRequestFilter {
+public class CorrelationIdFilter extends OncePerRequestFilter {
 
     private static final String CORRELATION_ID_HEADER = "X-Correlation-Id";
     // this key must match what you configure in logback-spring.xml
     private static final String CORRELATION_ID_MDC_KEY = "correlationId";
     // prefix for system-generated IDs
-    // makes it easy to distinguish generated vs caller-provided IDs in logs
-    private static final String GENERATED_ID_PREFIX = "c-";\
+    private static final String GENERATED_ID_PREFIX = "c-";
 
     @Override
-    public void doFilterInternal()
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain)
+            throws ServletException, IOException {
+        String correlationId = extractOrGenerate(request);
 
+        try {
+            MDC.put(CORRELATION_ID_MDC_KEY, correlationId);
 
+            // add to response header — caller receives it back
+            response.setHeader(CORRELATION_ID_HEADER, correlationId);
+
+            log.debug("Request received — correlationId={} method={} uri={}",
+                    correlationId,
+                    request.getMethod(),
+                    request.getRequestURI());
+            filterChain.doFilter(request, response);
+
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    private String extractOrGenerate(HttpServletRequest request) {
+        String header = request.getHeader(CORRELATION_ID_HEADER);
+
+        // if caller provided a correlation ID, use it as-is
+        if (header != null && !header.isBlank()) {
+            return header;
+        }
+
+        // caller did not provide one, generate a new UUID
+        // prefix with c- to identify system generated IDs in logs
+        return GENERATED_ID_PREFIX + UUID.randomUUID();
+    }
 }
