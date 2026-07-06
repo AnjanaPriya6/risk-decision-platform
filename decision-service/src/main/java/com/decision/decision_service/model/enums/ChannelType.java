@@ -4,9 +4,11 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 public enum ChannelType {
-    WEB,
     MOBILE,
-    API;
+    WEB,
+    API,
+    ATM,
+    BRANCH;
 
     @JsonCreator
     public static ChannelType fromValue(String value) {

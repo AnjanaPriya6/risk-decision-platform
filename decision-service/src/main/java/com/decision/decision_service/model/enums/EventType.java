@@ -6,7 +6,8 @@ import com.fasterxml.jackson.annotation.JsonValue;
 
 public enum EventType {
 
-    LOGIN_ATTEMPT;
+    LOGIN_ATTEMPT,
+    PAYMENT_INITIATION;
 
     @JsonCreator
     public static EventType fromValue(String value) {
