@@ -1,12 +1,10 @@
 package com.decision.decision_service.model.entity;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Getter
@@ -14,12 +12,13 @@ import java.time.Instant;
 @AllArgsConstructor
 @Setter
 @Table(name = "user_device_registry")
+@Builder
 public class UserDeviceRegistry {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "id", nullable = false, updatable = false)
-    private String id;
+    private UUID id;
 
     @Column(name = "user_id", nullable = false, updatable = false)
     private String userId;
@@ -27,10 +26,10 @@ public class UserDeviceRegistry {
     @Column(name = "device_id", nullable = false, updatable = false)
     private String deviceId;
 
-    @Column(name = "first_seen", nullable = false, insertable = false, updatable = false)
+    @Column(name = "first_seen", nullable = false, updatable = false)
     private Instant firstSeen;
 
-    @Column(name = "last_seen", nullable = false, insertable = false, updatable = false)
+    @Column(name = "last_seen", nullable = false)
     private Instant lastSeen;
 
     @Column(name = "login_count", nullable = false)
@@ -42,9 +41,9 @@ public class UserDeviceRegistry {
     @Column(name = "trusted_at")
     private Instant trustedAt;
 
-    @Column(name = "trusted_revoked_at")
-    private Instant trustedRevokedAt;
+    @Column(name = "trust_revoked_at")
+    private Instant trustRevokedAt;
 
     @Column(name = "deleted_at")
-    private Instant DeletedAt;
+    private Instant deletedAt;
 }
