@@ -24,5 +24,4 @@ public interface UserLoginHistoryRepository extends JpaRepository<UserLoginHisto
 
     //Login Velocity - P8
     int countByUserIdAndLoggedInAtAfter(String userId, Instant since);
-
 }
