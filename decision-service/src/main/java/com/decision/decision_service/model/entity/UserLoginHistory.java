@@ -17,27 +17,27 @@ public class UserLoginHistory {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "id", nullable = false)
+    @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-    @Column(name = "user_id", nullable = false)
+    @Column(name = "user_id", nullable = false, updatable = false)
     private String userId;
 
-    @Column(name = "country", nullable = false)
+    @Column(name = "country", nullable = false, updatable = false)
     private String country;
 
-    @Column(name = "city")
+    @Column(name = "city", updatable = false)
     private String city;
 
-    @Column(name = "ip_address")
+    @Column(name = "ip_address", updatable = false)
     private String ipAddress;
 
-    @Column(name = "device_id")
+    @Column(name = "device_id",updatable = false)
     private String deviceId;
 
-    @Column(name = "was_successful", nullable = false)
+    @Column(name = "was_successful", nullable = false, updatable = false)
     private Boolean wasSuccessful;
 
-    @Column(name = "logged_in_at", nullable = false, updatable = false)
+    @Column(name = "logged_in_at", nullable = false, updatable = false, insertable = false)
     private Instant loggedInAt;
 }
