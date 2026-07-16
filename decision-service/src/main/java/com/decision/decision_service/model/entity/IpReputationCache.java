@@ -19,7 +19,7 @@ public class IpReputationCache {
     @Column(name="ip_address",updatable = false,nullable = false)
     private String ipAddress;
 
-    @Column(name = "reputation_score", nullable = false)
+    @Column(name = "reputation_score", nullable = false, columnDefinition = "numeric")
     private BigDecimal reputationScore;
 
     @Column(name = "source", nullable = false, updatable = false)

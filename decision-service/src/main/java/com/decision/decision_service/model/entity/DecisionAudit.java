@@ -7,6 +7,7 @@ import com.decision.decision_service.model.enums.StepUpResult;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.UuidGenerator;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
@@ -24,9 +25,15 @@ import java.util.UUID;
 public class DecisionAudit {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "id", nullable = false, updatable = false)
+    @Column(name = "id", nullable = false, updatable = false, columnDefinition = "uuid")
     private UUID id;
+
+    @PrePersist
+    public void generateId() {
+        if (this.id == null) {
+            this.id = UUID.randomUUID();
+        }
+    }
 
     @Column(name = "correlation_id", nullable = false, unique = true, updatable = false)
     private String correlationId;
@@ -46,7 +53,7 @@ public class DecisionAudit {
     @Column(name = "reason_codes", nullable = false, updatable = false, columnDefinition = "text[]")
     private String[] reasonCodes;
 
-    @Column(name = "risk_score", updatable = false, nullable = false)
+    @Column(name = "risk_score", nullable = false, updatable = false, columnDefinition = "numeric")
     private BigDecimal riskScore;
 
     @Column(name = "policy_version", nullable = false, updatable = false)

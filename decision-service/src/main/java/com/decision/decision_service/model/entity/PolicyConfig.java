@@ -2,8 +2,11 @@ package com.decision.decision_service.model.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.UuidGenerator;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Builder
@@ -14,9 +17,15 @@ import java.time.Instant;
 public class PolicyConfig {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "id", nullable = false, updatable = false)
-    private Long id;
+    @Column(name = "id", nullable = false, updatable = false, columnDefinition = "uuid")
+    private UUID id;
+
+    @PrePersist
+    public void generateId() {
+        if (this.id == null) {
+            this.id = UUID.randomUUID();
+        }
+    }
 
     @Column(name = "policy_version", nullable = false, updatable = false,unique = true, insertable = false)
     private String policyVersion; //updated by the trigger interally in the db
@@ -30,9 +39,6 @@ public class PolicyConfig {
     @Column(name = "failed_attempts_window_minutes", nullable = false)
     private int failedAttemptsWindowMinutes;
 
-    @Column(name = "bad_ip_reputation_threshold", nullable = false)
-    private double badIpReputationThreshold;
-
     @Column(name = "is_account_locked_check_active", nullable = false)
     private Boolean isAccountLockedCheckActive;
 
@@ -45,14 +51,17 @@ public class PolicyConfig {
     @Column(name = "trusted_device_downgrades_block", nullable = false)
     private Boolean trustedDeviceDowngradesBlock;
 
-    @Column(name = "high_risk_score_threshold", nullable = false)
-    private double highRiskScoreThreshold;
+    @Column(name = "bad_ip_reputation_threshold", nullable = false, columnDefinition = "numeric")
+    private BigDecimal badIpReputationThreshold;
 
-    @Column(name = "new_device_risk_threshold", nullable = false)
-    private double newDeviceRiskThreshold;
+    @Column(name = "high_risk_score_threshold", nullable = false, columnDefinition = "numeric")
+    private BigDecimal highRiskScoreThreshold;
 
-    @Column(name = "new_country_risk_threshold", nullable = false)
-    private double newCountryRiskThreshold;
+    @Column(name = "new_device_risk_threshold", nullable = false, columnDefinition = "numeric")
+    private BigDecimal newDeviceRiskThreshold;
+
+    @Column(name = "new_country_risk_threshold", nullable = false, columnDefinition = "numeric")
+    private BigDecimal newCountryRiskThreshold;
 
     @Column(name = "login_velocity_threshold", nullable = false)
     private Integer loginVelocityThreshold;
