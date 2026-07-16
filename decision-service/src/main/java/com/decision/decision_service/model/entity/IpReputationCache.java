@@ -25,7 +25,7 @@ public class IpReputationCache {
     @Column(name = "source", nullable = false, updatable = false)
     private String source;
 
-    @Column(name = "cached_at", nullable = false, updatable = false)
+    @Column(name = "cached_at", nullable = false)
     private Instant cachedAt;
 
     @Column(name = "expires_at", nullable = false, updatable = false)

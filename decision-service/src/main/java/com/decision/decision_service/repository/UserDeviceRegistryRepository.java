@@ -13,5 +13,7 @@ public interface UserDeviceRegistryRepository extends JpaRepository<UserDeviceRe
     Boolean existsByUserIdAndDeviceIdAndDeletedAtIsNull(String userId, String deviceId);
     Optional<UserDeviceRegistry> findByUserIdAndDeviceIdAndDeletedAtIsNull(String userId, String deviceId);
     List<UserDeviceRegistry> findByUserIdAndDeletedAtIsNull(String userId);
+    List<UserDeviceRegistry> findByUserIdAndDeletedAtIsNullOrderByLastSeenDesc(
+            String userId);
 }
 
