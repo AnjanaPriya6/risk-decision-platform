@@ -22,8 +22,10 @@ public class GeoDto {
 
     @Min(0)
     @Max(20000)
-    private Double distance_from_last_login_km;
+    private Double distanceFromLastLoginKm;
 
-    @NotNull
-    private Boolean is_new_country;
+    private Boolean isNewCountry;
+
+    @Min(0)
+    private Integer minutesSinceLastLogin;
 }

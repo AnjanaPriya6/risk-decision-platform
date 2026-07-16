@@ -1,13 +1,12 @@
 package com.decision.decision_service.model.entity;
 
-import com.decision.decision_service.model.enums.ChannelType;
+import com.decision.decision_service.model.enums.Channel;
 import com.decision.decision_service.model.enums.DecisionOutcome;
 import com.decision.decision_service.model.enums.EventType;
 import com.decision.decision_service.model.enums.StepUpResult;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.annotations.UuidGenerator;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
@@ -64,7 +63,7 @@ public class DecisionAudit {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "channel", updatable = false, columnDefinition = "channel_enum")
-    private ChannelType channel;
+    private Channel channel;
 
     @Column(name = "decision_time_ms", updatable = false)
     private Integer decisionTimeMs;

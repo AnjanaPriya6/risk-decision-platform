@@ -9,6 +9,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -17,13 +19,15 @@ public class SignalDto {
 
     @Min(0)
     @Max(100)
-    private Integer failed_attempts_last_10m;
+    private Integer failedAttemptsLast10m;
 
     @Min(0)
     @Max(100)
-    private Integer login_attempts_last_10m;
+    private Integer loginAttemptsLast10m;
 
     @DecimalMin("0.0")
     @DecimalMax("1.0")
-    private Double ip_reputation;
+    private BigDecimal ipReputation;
+
+    private Boolean accountLocked;
 }

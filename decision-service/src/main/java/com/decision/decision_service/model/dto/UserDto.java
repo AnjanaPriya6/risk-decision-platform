@@ -17,9 +17,9 @@ public class UserDto {
 
     @NotBlank
     @Size(max = 100)
-    private String user_id;
+    private String userId;
 
     @Min(0)
     @Max(36500)
-    private Integer account_age_days;
+    private Integer accountAgeDays;
 }

@@ -9,7 +9,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import com.decision.decision_service.model.enums.ChannelType;
+import com.decision.decision_service.model.enums.Channel;
 
 import java.time.Instant;
 
@@ -22,14 +22,14 @@ public class ContextDto {
     private Instant timestamp;
 
     @NotNull
-    private ChannelType channel;
+    private Channel channel;
 
     @NotBlank
     @Pattern(regexp = "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")
-    private String ip_address;
+    private String ipAddress;
 
     @Size(max = 500)
-    private String user_agent;
+    private String userAgent;
 
     @Valid
     @NotNull(message = "DeviceDto cannot be null")

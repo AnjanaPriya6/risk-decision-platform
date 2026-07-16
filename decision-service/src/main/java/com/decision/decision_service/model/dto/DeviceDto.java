@@ -16,8 +16,7 @@ public class DeviceDto {
 
     @NotBlank
     @Size(max = 100)
-    private String device_id;
+    private String deviceId;
 
-    @NotNull
-    private Boolean is_new_device;
+    private Boolean isNewDevice;
 }
