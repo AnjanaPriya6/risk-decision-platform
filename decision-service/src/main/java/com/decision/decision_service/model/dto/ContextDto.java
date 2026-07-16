@@ -1,5 +1,6 @@
 package com.decision.decision_service.model.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -24,8 +25,8 @@ public class ContextDto {
     @NotNull
     private Channel channel;
 
-    @NotBlank
-    @Pattern(regexp = "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")
+    @NotBlank(message = "ip_address is required")
+    @JsonProperty("ip_address")
     private String ipAddress;
 
     @Size(max = 500)
