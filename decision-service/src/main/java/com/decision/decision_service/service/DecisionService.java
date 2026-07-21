@@ -5,8 +5,6 @@ import com.decision.decision_service.model.dto.LoginAttemptRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
-import java.awt.*;
-
 @Slf4j
 @Service
 public class DecisionService {
