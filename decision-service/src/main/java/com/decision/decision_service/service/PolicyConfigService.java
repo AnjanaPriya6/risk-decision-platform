@@ -21,12 +21,6 @@ public class PolicyConfigService {
 
     private final PolicyConfigRepository policyConfigRepository;
 
-    @PostConstruct
-    public void initCache() {
-        //pre-loading on startup
-        loadCurrentConfig();
-    }
-
     @Cacheable("policyConfig")
     public PolicyConfig loadCurrentConfig(){
         return policyConfigRepository.findTopByOrderByCreatedAtDesc()
