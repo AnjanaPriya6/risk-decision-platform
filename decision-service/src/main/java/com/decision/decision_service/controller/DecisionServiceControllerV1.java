@@ -31,9 +31,4 @@ public class DecisionServiceControllerV1 {
     public String ping() {
         return "pong";
     }
-
-    @GetMapping("/v1/policies")
-    public ResponseEntity<Object> policyLoad(){
-            return policyConfigService.loadCurrentConfig();
-        }
 }

@@ -72,7 +72,7 @@ public class GlobalExceptionHandler {
     }
 
     // 404 — PolicyConfig not found
-    @ExceptionHandler(PolicyConfigNotFound.class)
+    @ExceptionHandler(PolicyConfigNotFoundException.class)
     public ResponseEntity<Map<String, Object>> handlePolicyConfigNotFound(
             ResourceNotFoundException ex) {
 
