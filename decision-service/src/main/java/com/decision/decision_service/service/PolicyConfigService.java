@@ -6,6 +6,7 @@ import com.decision.decision_service.model.dto.PolicyRefreshResponse;
 import com.decision.decision_service.model.dto.Thresholds;
 import com.decision.decision_service.model.entity.PolicyConfig;
 import com.decision.decision_service.repository.PolicyConfigRepository;
+import jakarta.annotation.PostConstruct;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.CacheEvict;
 import lombok.AllArgsConstructor;
@@ -19,6 +20,12 @@ import java.time.Instant;
 public class PolicyConfigService {
 
     private final PolicyConfigRepository policyConfigRepository;
+
+    @PostConstruct
+    public void initCache() {
+        //pre-loading on startup
+        loadCurrentConfig();
+    }
 
     @Cacheable("policyConfig")
     public PolicyConfig loadCurrentConfig(){
