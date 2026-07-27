@@ -11,9 +11,9 @@ import java.util.UUID;
 @Repository
 public interface UserDeviceRegistryRepository extends JpaRepository<UserDeviceRegistry, UUID> {
     Boolean existsByUserIdAndDeviceIdAndDeletedAtIsNull(String userId, String deviceId);
+
     Optional<UserDeviceRegistry> findByUserIdAndDeviceIdAndDeletedAtIsNull(String userId, String deviceId);
-    List<UserDeviceRegistry> findByUserIdAndDeletedAtIsNull(String userId);
-    List<UserDeviceRegistry> findByUserIdAndDeletedAtIsNullOrderByLastSeenDesc(
-            String userId);
+
+    List<UserDeviceRegistry> findByUserIdAndDeletedAtIsNullOrderByLastSeenDesc(String userId);
 }
 
