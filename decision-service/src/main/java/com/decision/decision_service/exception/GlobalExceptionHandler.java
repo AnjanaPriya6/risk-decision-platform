@@ -71,6 +71,27 @@ public class GlobalExceptionHandler {
                 ));
     }
 
+    // 404 — PolicyConfig not found
+    @ExceptionHandler(PolicyConfigNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handlePolicyConfigNotFound(
+            ResourceNotFoundException ex) {
+
+        String correlationId = CorrelationIdHolder.get();
+
+        log.warn("PolicyConfig not found — correlationId={} message={}",
+                correlationId, ex.getMessage());
+
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(Map.of(
+                        "correlation_id", correlationId,
+                        "error_code", "POLICY_CONFIG_NOT_FOUND",
+                        "message", ex.getMessage(),
+                        "timestamp", Instant.now().toString()
+                ));
+    }
+
+
     // 500— Catch all for unexpected exceptions
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGenericException(Exception ex) {
