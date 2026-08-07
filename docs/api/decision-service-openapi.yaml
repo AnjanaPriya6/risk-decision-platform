@@ -1,0 +1,1607 @@
+openapi: 3.0.3
+
+info:
+  title: Secure FinTech Decision Platform API
+  description: |
+    A real-time risk decision engine for financial authentication and payment events.
+
+    ## Overview
+    Evaluates login attempts and payment initiations against a layered policy engine,
+    combining CNN-GRU ML-based risk scoring with deterministic business rules to produce
+    auditable, explainable decisions with a full immutable audit trail.
+
+    ## Architecture
+    Request → Auth → Correlation ID → Enrichment → Risk Scoring → Policy Engine → Decision → Async Audit → Response
+
+    ## Decision Outcomes
+    - **ALLOW** — risk is acceptable, proceed normally
+    - **STEP_UP** — require additional verification before proceeding
+    - **BLOCK** — reject the request entirely
+
+    ## Policy Evaluation Order
+    Hard blocks evaluated first — stops on first trigger.
+    Step-up rules evaluated after — all collected, up to 5 reason codes.
+
+    | Policy | Type | Condition |
+    |--------|------|-----------|
+    | P1 | BLOCK | failed_attempts >= brute_force_threshold |
+    | P2 | BLOCK | ip_reputation >= bad_ip_reputation_threshold |
+    | P3 | BLOCK | account_locked == true |
+    | P4 | BLOCK | distance >= impossible_travel_distance_km AND minutes <= impossible_travel_time_minutes |
+    | P0 | STEP_UP | no login history exists |
+    | P5 | STEP_UP | risk_score >= high_risk_score_threshold |
+    | P6 | STEP_UP | is_new_device AND risk_score >= new_device_risk_threshold |
+    | P7 | STEP_UP | is_new_country AND risk_score >= new_country_risk_threshold |
+    | P8 | STEP_UP | login_attempts >= login_velocity_threshold |
+    | Default | ALLOW | nothing triggered |
+
+    ## Fail-Safe Behaviour
+    If the risk scoring service is unavailable, the system fails closed — returning
+    STEP_UP with RISK_SERVICE_UNAVAILABLE. Decision endpoints never return 503.
+
+    ## Trusted Device Behaviour
+    If impossible travel (P4) is met but device is trusted and trusted_device_downgrades_block
+    is TRUE in policy_config, the decision downgrades from BLOCK to STEP_UP.
+
+    ## Policy Versioning
+    All thresholds stored in policy_config. Each change inserts a new row generating
+    a new version string (YYYY-MM-DD.N). Every decision records policy_version in the
+    audit trail for full reconstruction.
+
+    ## Audit Trail
+    Every decision writes an immutable row to decision_audit. Rows never deleted.
+    Only step_up_outcome and step_up_completed_at are updated — by the step-up callback only.
+    created_at always set by database DEFAULT NOW().
+
+  version: 2.0.0
+  contact:
+    name: Anjana Priya Konapala
+    url: https://github.com/AnjanaPriya6/secure-fintech-decision-platform
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://your-app.railway.app
+    description: Railway deployment
+
+tags:
+  - name: Decisions
+    description: Core decision engine — evaluate login and payment events
+  - name: Step-Up
+    description: Step-up authentication result callback
+  - name: Audit
+    description: Query the immutable audit trail
+  - name: Policy
+    description: View and manage policy configuration
+  - name: Devices
+    description: User device registry and trust management
+  - name: Health
+    description: Service health and dependency status
+  - name: Auth
+    description: Test JWT generation — not for production
+
+paths:
+
+  /v1/decisions/login-attempt:
+    post:
+      tags: [Decisions]
+      summary: Evaluate a login attempt
+      description: |
+        The primary endpoint. Accepts a login attempt event and returns a risk decision.
+
+        Internal processing order:
+        1. CorrelationIdFilter — generate or propagate X-Correlation-Id, store in MDC
+        2. JwtAuthenticationFilter — validate Bearer token, return 401 if invalid
+        3. Request validation — @Valid annotations, return 400 with field errors if invalid
+        4. Enrichment — compute is_new_device, is_new_country, distance, time from database
+           (skipped for signals already provided by caller — hint pattern)
+        5. Load policy config — fetch current thresholds from cache
+        6. Risk scoring — call Python CNN-GRU service, timeout 1000ms
+           On timeout: return 200 STEP_UP with RISK_SERVICE_UNAVAILABLE (fail-closed)
+        7. Policy engine — evaluate P1-P4 (hard blocks), then P0, P5-P8 (step-up)
+        8. Build response — decision_time_ms, policy_version, model_version
+        9. Write audit record — @Async, does not block response
+        10. Update user profile — recordSuccessfulLogin() ONLY if decision is ALLOW
+
+        Why only ALLOW updates the profile: STEP_UP means authentication is not yet confirmed.
+        Recording device/country before OTP verification would allow a fraudster who triggers
+        STEP_UP to build fake legitimate history. Use POST /v1/decisions/step-up-result callback.
+      operationId: evaluateLoginAttempt
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/ClientIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginAttemptRequest'
+            examples:
+              low_risk_allow:
+                summary: Low risk — known device, known country → ALLOW
+                value:
+                  event_type: LOGIN_ATTEMPT
+                  user:
+                    user_id: U123
+                    account_age_days: 900
+                  context:
+                    timestamp: "2026-04-21T09:00:00Z"
+                    channel: MOBILE
+                    ip_address: "192.168.1.1"
+                    user_agent: "MyBankingApp/2.1 Android"
+                    device:
+                      device_id: device_trusted_01
+                      is_new_device: false
+                    geo:
+                      country: SG
+                      city: Singapore
+                      distance_from_last_login_km: 1.2
+                      minutes_since_last_login: 480
+                      is_new_country: false
+                  signals:
+                    failed_attempts_last_10m: 0
+                    login_attempts_last_10m: 1
+                    ip_reputation: 0.05
+                    account_locked: false
+              step_up_new_device:
+                summary: New device with elevated risk → STEP_UP
+                value:
+                  event_type: LOGIN_ATTEMPT
+                  user:
+                    user_id: U123
+                    account_age_days: 120
+                  context:
+                    timestamp: "2026-04-21T12:30:00Z"
+                    channel: MOBILE
+                    ip_address: "203.0.113.10"
+                    user_agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)"
+                    device:
+                      device_id: device_new_abc
+                      is_new_device: true
+                    geo:
+                      country: SG
+                      city: Singapore
+                      distance_from_last_login_km: 5.0
+                      minutes_since_last_login: 60
+                      is_new_country: false
+                  signals:
+                    failed_attempts_last_10m: 1
+                    login_attempts_last_10m: 2
+                    ip_reputation: 0.20
+                    account_locked: false
+              brute_force_block:
+                summary: Brute force attack → BLOCK
+                value:
+                  event_type: LOGIN_ATTEMPT
+                  user:
+                    user_id: U456
+                    account_age_days: 365
+                  context:
+                    timestamp: "2026-04-21T14:00:00Z"
+                    channel: WEB
+                    ip_address: "10.0.0.1"
+                    user_agent: "Mozilla/5.0"
+                    device:
+                      device_id: device_unknown
+                      is_new_device: true
+                    geo:
+                      country: IN
+                      city: Hyderabad
+                      distance_from_last_login_km: 0
+                      minutes_since_last_login: 2
+                      is_new_country: false
+                  signals:
+                    failed_attempts_last_10m: 7
+                    login_attempts_last_10m: 8
+                    ip_reputation: 0.10
+                    account_locked: false
+              impossible_travel_block:
+                summary: Impossible travel → BLOCK
+                value:
+                  event_type: LOGIN_ATTEMPT
+                  user:
+                    user_id: U789
+                    account_age_days: 500
+                  context:
+                    timestamp: "2026-04-21T10:00:00Z"
+                    channel: WEB
+                    ip_address: "198.51.100.1"
+                    user_agent: "Mozilla/5.0"
+                    device:
+                      device_id: device_foreign
+                      is_new_device: true
+                    geo:
+                      country: US
+                      city: New York
+                      distance_from_last_login_km: 15000
+                      minutes_since_last_login: 30
+                      is_new_country: true
+                  signals:
+                    failed_attempts_last_10m: 0
+                    login_attempts_last_10m: 1
+                    ip_reputation: 0.15
+                    account_locked: false
+              first_login_step_up:
+                summary: First ever login → STEP_UP via P0
+                value:
+                  event_type: LOGIN_ATTEMPT
+                  user:
+                    user_id: U999
+                    account_age_days: 1
+                  context:
+                    timestamp: "2026-04-21T08:00:00Z"
+                    channel: MOBILE
+                    ip_address: "192.168.0.1"
+                    user_agent: "MyBankingApp/2.1 Android"
+                    device:
+                      device_id: device_first
+                      is_new_device: true
+                    geo:
+                      country: SG
+                      city: Singapore
+                      distance_from_last_login_km: 0
+                      minutes_since_last_login: 0
+                      is_new_country: true
+                  signals:
+                    failed_attempts_last_10m: 0
+                    login_attempts_last_10m: 1
+                    ip_reputation: 0.02
+                    account_locked: false
+      responses:
+        "200":
+          description: Decision evaluated successfully — always returned even when risk service is down
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+              examples:
+                allow:
+                  summary: ALLOW
+                  value:
+                    correlation_id: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+                    decision: ALLOW
+                    reason_codes: [LOW_RISK]
+                    risk_score: 0.12
+                    policy_version: "2026-04-21.1"
+                    model_version: "risk-v1.0.0"
+                    decision_time_ms: 38
+                step_up:
+                  summary: STEP_UP with multiple reason codes
+                  value:
+                    correlation_id: c-9a1b2c3d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+                    decision: STEP_UP
+                    reason_codes: [NEW_DEVICE, RISK_SCORE_HIGH]
+                    risk_score: 0.82
+                    policy_version: "2026-04-21.1"
+                    model_version: "risk-v1.0.0"
+                    decision_time_ms: 45
+                block:
+                  summary: BLOCK
+                  value:
+                    correlation_id: c-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+                    decision: BLOCK
+                    reason_codes: [BRUTE_FORCE_SUSPECTED]
+                    risk_score: 0.91
+                    policy_version: "2026-04-21.1"
+                    model_version: "risk-v1.0.0"
+                    decision_time_ms: 23
+                risk_service_down:
+                  summary: Risk service unavailable — fail-closed
+                  value:
+                    correlation_id: c-2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
+                    decision: STEP_UP
+                    reason_codes: [RISK_SERVICE_UNAVAILABLE]
+                    risk_score: 0.0
+                    policy_version: "2026-04-21.1"
+                    model_version: "unavailable"
+                    decision_time_ms: 1002
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/decisions/step-up-result:
+    post:
+      tags: [Step-Up]
+      summary: Record the outcome of a step-up authentication challenge
+      description: |
+        Called by the authentication service after step-up verification completes.
+        Updates the audit record and user profile based on the outcome.
+
+        Why this endpoint exists: When POST /v1/decisions/login-attempt returns STEP_UP,
+        the decision service does not know what happens next — OTP verification happens
+        in a separate system. Without this callback the service cannot safely record
+        device and country history.
+
+        Outcomes:
+        - PASSED — calls recordSuccessfulLogin(), updates audit step_up_outcome = PASSED
+        - FAILED — calls recordFailedLogin(), updates audit step_up_outcome = FAILED
+        - ABANDONED — updates audit step_up_outcome = ABANDONED only
+
+        The original decision (STEP_UP) is never changed. Only step_up_outcome and
+        step_up_completed_at are updated — the only exception to the append-only audit trail.
+      operationId: recordStepUpResult
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StepUpResultRequest'
+            examples:
+              passed:
+                summary: OTP passed
+                value:
+                  correlation_id: c-9a1b2c3d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+                  user_id: U123
+                  device_id: device_new_abc
+                  country: SG
+                  city: Singapore
+                  ip_address: "203.0.113.10"
+                  result: PASSED
+                  completed_at: "2026-04-21T12:31:45Z"
+              failed:
+                summary: OTP failed
+                value:
+                  correlation_id: c-9a1b2c3d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+                  user_id: U123
+                  device_id: device_new_abc
+                  country: SG
+                  city: Singapore
+                  ip_address: "203.0.113.10"
+                  result: FAILED
+                  completed_at: "2026-04-21T12:32:10Z"
+              abandoned:
+                summary: User abandoned
+                value:
+                  correlation_id: c-9a1b2c3d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+                  user_id: U123
+                  device_id: device_new_abc
+                  country: SG
+                  city: Singapore
+                  ip_address: "203.0.113.10"
+                  result: ABANDONED
+                  completed_at: "2026-04-21T12:33:00Z"
+      responses:
+        "200":
+          description: Step-up result recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  correlation_id:
+                    type: string
+                    example: c-9a1b2c3d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+                  result_recorded:
+                    type: string
+                    enum: [PASSED, FAILED, ABANDONED]
+                  profile_updated:
+                    type: boolean
+                    description: True only on PASSED
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: No audit record found for correlation_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/decisions/payment-initiation:
+    post:
+      tags: [Decisions]
+      summary: Evaluate a payment initiation (Phase 2)
+      description: |
+        ISO 20022 pacs.008 aligned payment risk decision.
+
+        Payment hard block policies:
+        - P_PAY1 — amount > daily_transaction_limit → BLOCK (AMOUNT_LIMIT_EXCEEDED)
+        - P_PAY2 — creditor on sanctions list → BLOCK (SANCTIONS_MATCH)
+        - P_PAY3 — transactions_last_24h >= threshold → BLOCK (PAYMENT_VELOCITY_BREACH)
+
+        Payment step-up policies:
+        - P_PAY4 — is_new_beneficiary AND amount >= threshold → STEP_UP (NEW_BENEFICIARY_HIGH_VALUE)
+        - P_PAY5 — CROSS_BORDER AND risk_score >= threshold → STEP_UP (CROSS_BORDER_HIGH_RISK)
+        - P_PAY6 — amount >= multiplier * avg_amount_30d → STEP_UP (UNUSUAL_AMOUNT)
+      operationId: evaluatePaymentInitiation
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/ClientIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentInitiationRequest'
+            examples:
+              cross_border:
+                summary: Cross-border to new beneficiary → STEP_UP
+                value:
+                  event_type: PAYMENT_INITIATION
+                  user:
+                    user_id: U123
+                    account_age_days: 365
+                  payment:
+                    payment_id: PAY-2026-001
+                    amount: 15000.00
+                    currency: SGD
+                    payment_type: CROSS_BORDER
+                    channel: MOBILE
+                    creditor:
+                      account_number: GB29NWBK60161331926819
+                      bank_bic: NWBKGB2L
+                      name: John Smith
+                      country: GB
+                    debtor:
+                      account_number: SG12DBS0000012345678
+                      bank_bic: DBSSSGSG
+                      name: Anjana Priya
+                      country: SG
+                    purpose_code: TRADE
+                    is_new_beneficiary: true
+                  context:
+                    timestamp: "2026-04-21T10:00:00Z"
+                    ip_address: "203.0.113.10"
+                    device_id: device_trusted_01
+                  signals:
+                    transactions_last_24h: 3
+                    avg_transaction_amount_30d: 500.00
+                    ip_reputation: 0.15
+      responses:
+        "200":
+          description: Payment decision evaluated
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/audit/{correlationId}:
+    get:
+      tags: [Audit]
+      summary: Retrieve audit record by correlation ID
+      description: |
+        Returns the complete immutable audit record for a specific decision.
+        Used by support agents and compliance teams.
+
+        The policy_version field lets you query policy_config WHERE policy_version = this value
+        to reconstruct the exact thresholds active when the decision was made.
+        The model_version identifies which ML model produced the risk_score.
+      operationId: getAuditByCorrelationId
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: correlationId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+      responses:
+        "200":
+          description: Audit record found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditRecord'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: Audit record not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/audit/user/{userId}:
+    get:
+      tags: [Audit]
+      summary: Query paginated audit records for a user
+      description: |
+        Returns paginated audit records with optional date range and decision filters.
+        Maximum page size 100. Used for compliance reports and fraud investigations.
+      operationId: getAuditByUserId
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: U123
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2026-04-01T00:00:00Z"
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2026-04-30T23:59:59Z"
+        - name: decision
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/DecisionOutcome'
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Audit records returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/policies:
+    get:
+      tags: [Policy]
+      summary: Get current active policy configuration
+      description: |
+        Returns the most recently inserted row in policy_config — all thresholds,
+        all boolean flags, policy_version, created_at, created_by, change_reason.
+
+        All values are configurable without code changes or redeployment.
+        Changes take effect after INSERT + POST /v1/policies/refresh.
+      operationId: getCurrentPolicy
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Current policy configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyConfigResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/policies/refresh:
+    post:
+      tags: [Policy]
+      summary: Refresh policy cache from database
+      description: |
+        Clears the in-memory policy cache and reloads the latest row from policy_config.
+        New thresholds take effect immediately for all subsequent decisions.
+
+        How to change a threshold:
+        1. INSERT new row into policy_config with updated values
+        2. Database trigger auto-generates new policy_version (YYYY-MM-DD.N)
+        3. Call POST /v1/policies/refresh
+        4. All subsequent decisions use new thresholds
+
+        No developer. No deployment. Done in under 60 seconds.
+      operationId: refreshPolicyCache
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Cache refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Policy cache refreshed successfully
+                  policy_version:
+                    type: string
+                    example: "2026-04-21.2"
+                  refreshed_at:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/users/{userId}/devices:
+    get:
+      tags: [Devices]
+      summary: Get all devices for a user
+      description: |
+        Returns all active (non-deleted) devices ordered by last_seen descending.
+        Used by support agents and banking app device management screens.
+      operationId: getUserDevices
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: U123
+      responses:
+        "200":
+          description: Device list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceListResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/users/{userId}/devices/{deviceId}/trust:
+    post:
+      tags: [Devices]
+      summary: Mark a device as trusted
+      description: |
+        Sets is_trusted = true and trusted_at = NOW().
+
+        Effect on P4: When impossible travel is detected and the device is trusted,
+        the decision downgrades from BLOCK to STEP_UP — provided trusted_device_downgrades_block
+        is TRUE in policy_config.
+
+        Called by the authentication service after successful step-up on a new device,
+        or by the banking app when user explicitly trusts a device.
+      operationId: trustDevice
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device trusted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: Device not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [Devices]
+      summary: Revoke trust for a device
+      description: |
+        Sets is_trusted = false and trust_revoked_at = NOW().
+        Device row preserved — full trust history kept for fraud investigation.
+        Called when user reports a device lost or stolen.
+      operationId: revokeDeviceTrust
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trust revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: Device not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/users/{userId}/devices/{deviceId}:
+    delete:
+      tags: [Devices]
+      summary: Soft-delete a device
+      description: |
+        Sets deleted_at = NOW(). Device treated as new on next login.
+        Physical row preserved for fraud investigation history.
+        All queries use WHERE deleted_at IS NULL.
+      operationId: deleteDevice
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device soft-deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id:
+                    type: string
+                  device_id:
+                    type: string
+                  deleted_at:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: Device not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/health:
+    get:
+      tags: [Health]
+      summary: Service health check
+      description: |
+        Returns operational status of the decision service and all dependencies.
+        No authentication required — monitoring systems cannot obtain JWT tokens.
+
+        Dependencies checked:
+        - Database — SELECT 1 against PostgreSQL
+        - Risk service — GET /health on Python service
+        - Policy cache — policies currently loaded
+
+        Status: UP (all healthy), DEGRADED (risk service down, DB up), DOWN (DB unreachable)
+      operationId: healthCheck
+      security: []
+      responses:
+        "200":
+          description: Service healthy or degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  value:
+                    status: UP
+                    timestamp: "2026-04-21T12:30:00Z"
+                    dependencies:
+                      database:
+                        status: UP
+                        response_time_ms: 5
+                      risk_service:
+                        status: UP
+                        response_time_ms: 23
+                      policy_cache:
+                        status: UP
+                        policy_version: "2026-04-21.1"
+                        policies_loaded: 9
+                degraded:
+                  value:
+                    status: DEGRADED
+                    timestamp: "2026-04-21T12:30:00Z"
+                    dependencies:
+                      database:
+                        status: UP
+                        response_time_ms: 4
+                      risk_service:
+                        status: DOWN
+                        error: "Connection timeout after 1000ms"
+                      policy_cache:
+                        status: UP
+                        policy_version: "2026-04-21.1"
+                        policies_loaded: 9
+        "503":
+          description: Service DOWN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /auth/token:
+    post:
+      tags: [Auth]
+      summary: Generate test JWT token (TEST ONLY — not for production)
+      description: |
+        TEST ONLY — this endpoint would not exist in production.
+        In production, JWT tokens are issued by an external identity provider
+        such as Okta, Keycloak, or AWS Cognito.
+
+        Credentials validated against test values in application-dev.properties only.
+        Never present in production profile.
+      operationId: generateTestToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_id, client_secret]
+              properties:
+                client_id:
+                  type: string
+                  example: test-client-01
+                client_secret:
+                  type: string
+                  example: test-secret-01
+      responses:
+        "200":
+          description: Token generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0LWNsaWVudC0wMSJ9.abc123
+                  token_type:
+                    type: string
+                    example: Bearer
+                  expires_in:
+                    type: integer
+                    example: 3600
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT Bearer token. In development obtain from POST /auth/token.
+        In production issued by external identity provider.
+
+  parameters:
+    CorrelationIdHeader:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: |
+        Optional. If provided, used as-is and echoed in response.
+        If not provided, a UUID is generated (prefixed with "c-").
+        Stored in MDC, audit trail, and response headers.
+      schema:
+        type: string
+        example: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+
+    ClientIdHeader:
+      name: X-Client-Id
+      in: header
+      required: false
+      description: Identifies the upstream channel or application
+      schema:
+        type: string
+        example: mobile-banking-app
+
+  headers:
+    XCorrelationId:
+      description: Correlation ID used for this request
+      schema:
+        type: string
+
+  schemas:
+
+    LoginAttemptRequest:
+      type: object
+      required: [event_type, user, context, signals]
+      properties:
+        event_type:
+          type: string
+          enum: [LOGIN_ATTEMPT]
+        user:
+          $ref: '#/components/schemas/UserContext'
+        context:
+          $ref: '#/components/schemas/RequestContext'
+        signals:
+          $ref: '#/components/schemas/RiskSignals'
+
+    PaymentInitiationRequest:
+      type: object
+      required: [event_type, user, payment, context, signals]
+      description: ISO 20022 pacs.008 aligned
+      properties:
+        event_type:
+          type: string
+          enum: [PAYMENT_INITIATION]
+        user:
+          $ref: '#/components/schemas/UserContext'
+        payment:
+          $ref: '#/components/schemas/PaymentContext'
+        context:
+          $ref: '#/components/schemas/PaymentRequestContext'
+        signals:
+          $ref: '#/components/schemas/PaymentRiskSignals'
+
+    StepUpResultRequest:
+      type: object
+      required: [correlation_id, user_id, device_id, country, ip_address, result, completed_at]
+      properties:
+        correlation_id:
+          type: string
+          description: The correlation ID from the original STEP_UP decision response
+          example: c-9a1b2c3d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+        user_id:
+          type: string
+          example: U123
+        device_id:
+          type: string
+          example: device_new_abc
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          example: SG
+        city:
+          type: string
+          nullable: true
+          example: Singapore
+        ip_address:
+          type: string
+          example: "203.0.113.10"
+        result:
+          $ref: '#/components/schemas/StepUpResult'
+        completed_at:
+          type: string
+          format: date-time
+          example: "2026-04-21T12:31:45Z"
+
+    UserContext:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: string
+          example: U123
+          minLength: 1
+          maxLength: 64
+        account_age_days:
+          type: integer
+          example: 120
+          minimum: 0
+
+    RequestContext:
+      type: object
+      required: [timestamp, channel, ip_address, user_agent, device, geo]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-04-21T12:30:00Z"
+        channel:
+          $ref: '#/components/schemas/Channel'
+        ip_address:
+          type: string
+          example: "203.0.113.10"
+        user_agent:
+          type: string
+          maxLength: 512
+          example: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)"
+        device:
+          $ref: '#/components/schemas/DeviceContext'
+        geo:
+          $ref: '#/components/schemas/GeoContext'
+
+    PaymentRequestContext:
+      type: object
+      required: [timestamp, ip_address, device_id]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        ip_address:
+          type: string
+        device_id:
+          type: string
+
+    DeviceContext:
+      type: object
+      required: [device_id]
+      properties:
+        device_id:
+          type: string
+          example: device_abc
+          minLength: 1
+          maxLength: 128
+        is_new_device:
+          type: boolean
+          nullable: true
+          description: |
+            Optional hint. If null, computed from user_device_registry.
+            Hint pattern — callers who know can provide this to save a DB round trip.
+          example: true
+
+    GeoContext:
+      type: object
+      required: [country]
+      properties:
+        country:
+          type: string
+          example: SG
+          minLength: 2
+          maxLength: 2
+        city:
+          type: string
+          nullable: true
+          example: Singapore
+        distance_from_last_login_km:
+          type: number
+          format: double
+          nullable: true
+          description: Optional hint. If null, computed from user_login_history. Used by P4.
+          example: 15000.0
+          minimum: 0
+        minutes_since_last_login:
+          type: integer
+          nullable: true
+          description: Optional hint. If null, computed from user_login_history. Used by P4.
+          example: 30
+          minimum: 0
+        is_new_country:
+          type: boolean
+          nullable: true
+          description: Optional hint. If null, computed from user_login_history. Used by P7.
+          example: true
+
+    RiskSignals:
+      type: object
+      required: [failed_attempts_last_10m, login_attempts_last_10m, ip_reputation]
+      properties:
+        failed_attempts_last_10m:
+          type: integer
+          description: |
+            Failed attempts in last N minutes. N = failed_attempts_window_minutes from policy_config.
+            Used by P1 (threshold brute_force_threshold) and P8 (threshold login_velocity_threshold).
+          example: 2
+          minimum: 0
+        login_attempts_last_10m:
+          type: integer
+          description: |
+            Total attempts in last N minutes. N = login_velocity_window_minutes from policy_config.
+            Used by P8 login velocity detection.
+          example: 3
+          minimum: 0
+        ip_reputation:
+          type: number
+          format: double
+          description: |
+            0.0 = clean, 1.0 = known malicious.
+            Used by P2 (threshold bad_ip_reputation_threshold = 0.95).
+          example: 0.2
+          minimum: 0.0
+          maximum: 1.0
+        account_locked:
+          type: boolean
+          nullable: true
+          description: |
+            Used by P3 when is_account_locked_check_active is TRUE in policy_config.
+            If null and check is active, P3 is skipped.
+          example: false
+
+    PaymentContext:
+      type: object
+      required: [payment_id, amount, currency, payment_type, channel, creditor, debtor]
+      properties:
+        payment_id:
+          type: string
+          example: PAY-2026-001
+        amount:
+          type: number
+          format: double
+          example: 15000.00
+          minimum: 0.01
+        currency:
+          type: string
+          description: ISO 4217
+          example: SGD
+          minLength: 3
+          maxLength: 3
+        payment_type:
+          type: string
+          enum: [DOMESTIC, CROSS_BORDER, FAST, PAYNOW]
+          example: CROSS_BORDER
+        channel:
+          $ref: '#/components/schemas/Channel'
+        creditor:
+          $ref: '#/components/schemas/PartyIdentification'
+        debtor:
+          $ref: '#/components/schemas/PartyIdentification'
+        purpose_code:
+          type: string
+          description: ISO 20022 purpose code
+          example: TRADE
+          maxLength: 4
+        is_new_beneficiary:
+          type: boolean
+          example: true
+
+    PartyIdentification:
+      type: object
+      description: ISO 20022 structured party identification
+      properties:
+        account_number:
+          type: string
+          description: IBAN or local account number
+          example: GB29NWBK60161331926819
+        bank_bic:
+          type: string
+          description: BIC/SWIFT code
+          example: NWBKGB2L
+          minLength: 8
+          maxLength: 11
+        name:
+          type: string
+          maxLength: 140
+          example: John Smith
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          example: GB
+
+    PaymentRiskSignals:
+      type: object
+      required: [transactions_last_24h, avg_transaction_amount_30d, ip_reputation]
+      properties:
+        transactions_last_24h:
+          type: integer
+          example: 3
+          minimum: 0
+        avg_transaction_amount_30d:
+          type: number
+          format: double
+          example: 500.00
+          minimum: 0
+        ip_reputation:
+          type: number
+          format: double
+          example: 0.15
+          minimum: 0.0
+          maximum: 1.0
+
+    DecisionResponse:
+      type: object
+      required: [correlation_id, decision, reason_codes, risk_score, policy_version, model_version, decision_time_ms]
+      properties:
+        correlation_id:
+          type: string
+          description: Store this — used to retrieve audit record via GET /v1/audit/{correlationId}
+          example: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+        decision:
+          $ref: '#/components/schemas/DecisionOutcome'
+        reason_codes:
+          type: array
+          description: Up to 5 reason codes. Each identifies which policy triggered.
+          items:
+            $ref: '#/components/schemas/ReasonCode'
+          minItems: 1
+          maxItems: 5
+          example: [NEW_DEVICE, RISK_SCORE_HIGH]
+        risk_score:
+          type: number
+          format: double
+          description: CNN-GRU ML model output. 0.0 = low risk, 1.0 = high risk.
+          example: 0.82
+          minimum: 0.0
+          maximum: 1.0
+        policy_version:
+          type: string
+          description: |
+            Policy ruleset version active at decision time. Format YYYY-MM-DD.N.
+            Query policy_config WHERE policy_version = this to reconstruct exact thresholds.
+          example: "2026-04-21.1"
+        model_version:
+          type: string
+          description: ML model version. Stored for governance and drift detection.
+          example: "risk-v1.0.0"
+        decision_time_ms:
+          type: integer
+          description: Total milliseconds from request received to response sent
+          example: 45
+          minimum: 0
+
+    AuditRecord:
+      type: object
+      description: |
+        Immutable audit record. Never deleted. Only step_up_outcome and
+        step_up_completed_at are updated after initial write.
+        created_at always set by database DEFAULT NOW().
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        correlation_id:
+          type: string
+          example: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+        user_id:
+          type: string
+          example: U123
+        event_type:
+          $ref: '#/components/schemas/EventType'
+        decision:
+          $ref: '#/components/schemas/DecisionOutcome'
+        reason_codes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonCode'
+          example: [NEW_DEVICE, RISK_SCORE_HIGH]
+        risk_score:
+          type: number
+          format: double
+          example: 0.82
+        policy_version:
+          type: string
+          example: "2026-04-21.1"
+        model_version:
+          type: string
+          example: "risk-v1.0.0"
+        decision_time_ms:
+          type: integer
+          example: 45
+        channel:
+          $ref: '#/components/schemas/Channel'
+        ip_address:
+          type: string
+          example: "203.0.113.10"
+        step_up_outcome:
+          $ref: '#/components/schemas/StepUpResult'
+          nullable: true
+          description: Null for ALLOW and BLOCK. Set by step-up callback for STEP_UP decisions.
+        step_up_completed_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-04-21T12:31:45Z"
+        created_at:
+          type: string
+          format: date-time
+          description: Set by database DEFAULT NOW(). Never set by application code.
+          example: "2026-04-21T12:30:00Z"
+
+    AuditPage:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditRecord'
+        total_elements:
+          type: integer
+          example: 47
+        total_pages:
+          type: integer
+          example: 3
+        current_page:
+          type: integer
+          example: 0
+        page_size:
+          type: integer
+          example: 20
+
+    PolicyConfigResponse:
+      type: object
+      properties:
+        policy_version:
+          type: string
+          example: "2026-04-21.1"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-04-21T16:17:04Z"
+        created_by:
+          type: string
+          example: system
+        change_reason:
+          type: string
+          nullable: true
+          example: "Initial policy configuration — system seed"
+        flags:
+          type: object
+          properties:
+            is_first_login_check_active:
+              type: boolean
+              example: true
+            is_account_locked_check_active:
+              type: boolean
+              example: true
+            trusted_device_downgrades_block:
+              type: boolean
+              example: true
+        thresholds:
+          type: object
+          properties:
+            brute_force_threshold:
+              type: integer
+              example: 6
+            failed_attempts_window_minutes:
+              type: integer
+              example: 10
+            bad_ip_reputation_threshold:
+              type: number
+              format: double
+              example: 0.95
+            impossible_travel_distance_km:
+              type: integer
+              example: 2000
+            impossible_travel_time_minutes:
+              type: integer
+              example: 60
+            high_risk_score_threshold:
+              type: number
+              format: double
+              example: 0.80
+            new_device_risk_threshold:
+              type: number
+              format: double
+              example: 0.65
+            new_country_risk_threshold:
+              type: number
+              format: double
+              example: 0.60
+            login_velocity_threshold:
+              type: integer
+              example: 4
+            login_velocity_window_minutes:
+              type: integer
+              example: 10
+
+    DeviceListResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+          example: U123
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeviceResponse'
+
+    DeviceResponse:
+      type: object
+      properties:
+        device_id:
+          type: string
+          example: device_abc
+        first_seen:
+          type: string
+          format: date-time
+          example: "2025-01-15T08:30:00Z"
+        last_seen:
+          type: string
+          format: date-time
+          example: "2026-04-20T09:15:00Z"
+        login_count:
+          type: integer
+          example: 47
+        is_trusted:
+          type: boolean
+          example: true
+        trusted_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2025-01-15T08:45:00Z"
+        trust_revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [UP, DEGRADED, DOWN]
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          properties:
+            database:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [UP, DOWN]
+                response_time_ms:
+                  type: integer
+                error:
+                  type: string
+                  nullable: true
+            risk_service:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [UP, DOWN]
+                response_time_ms:
+                  type: integer
+                error:
+                  type: string
+                  nullable: true
+            policy_cache:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [UP, DOWN]
+                policy_version:
+                  type: string
+                  nullable: true
+                policies_loaded:
+                  type: integer
+
+    ErrorResponse:
+      type: object
+      required: [correlation_id, error_code, message, timestamp]
+      properties:
+        correlation_id:
+          type: string
+          example: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+        error_code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          example: "Required field 'user.user_id' is missing"
+        field_errors:
+          type: array
+          nullable: true
+          description: Only present on 400 responses
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: signals.ip_reputation
+              message:
+                type: string
+                example: must be between 0.0 and 1.0
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-04-21T12:30:45Z"
+
+    DecisionOutcome:
+      type: string
+      enum: [ALLOW, STEP_UP, BLOCK]
+
+    ReasonCode:
+      type: string
+      enum:
+        - BRUTE_FORCE_SUSPECTED        # P1
+        - BAD_IP_REPUTATION            # P2
+        - ACCOUNT_LOCKED               # P3
+        - IMPOSSIBLE_TRAVEL            # P4
+        - FIRST_LOGIN                  # P0
+        - RISK_SCORE_HIGH              # P5
+        - NEW_DEVICE                   # P6
+        - NEW_COUNTRY                  # P7
+        - LOGIN_VELOCITY               # P8
+        - LOW_RISK                     # Default ALLOW
+        - RISK_SERVICE_UNAVAILABLE     # Fail-closed STEP_UP
+        - AMOUNT_LIMIT_EXCEEDED        # P_PAY1 Phase 2
+        - SANCTIONS_MATCH              # P_PAY2 Phase 2
+        - PAYMENT_VELOCITY_BREACH      # P_PAY3 Phase 2
+        - NEW_BENEFICIARY_HIGH_VALUE   # P_PAY4 Phase 2
+        - CROSS_BORDER_HIGH_RISK       # P_PAY5 Phase 2
+        - UNUSUAL_AMOUNT               # P_PAY6 Phase 2
+
+    StepUpResult:
+      type: string
+      enum: [PASSED, FAILED, ABANDONED]
+      description: |
+        PASSED — profile updated, audit updated
+        FAILED — failed attempt recorded, audit updated
+        ABANDONED — audit updated only
+
+    EventType:
+      type: string
+      enum: [LOGIN_ATTEMPT, PAYMENT_INITIATION]
+
+    Channel:
+      type: string
+      enum: [MOBILE, WEB, API, ATM, BRANCH]
+      example: MOBILE
+
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_REQUEST
+        - MISSING_REQUIRED_FIELD
+        - INVALID_FIELD_VALUE
+        - UNAUTHORIZED
+        - RECORD_NOT_FOUND
+        - DEVICE_NOT_FOUND
+        - RISK_SERVICE_UNAVAILABLE
+        - INTERNAL_ERROR
+
+  responses:
+
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            correlation_id: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+            error_code: INVALID_REQUEST
+            message: Request validation failed
+            field_errors:
+              - field: signals.ip_reputation
+                message: must be between 0.0 and 1.0
+            timestamp: "2026-04-21T12:30:45Z"
+
+    Unauthorized:
+      description: JWT token missing, expired, or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            correlation_id: c-7f3b5d2e-4a1c-4b8e-9d3f-1a2b3c4d5e6f
+            error_code: UNAUTHORIZED
+            message: JWT token is missing or invalid
+            timestamp: "2026-04-21T12:30:45Z"
