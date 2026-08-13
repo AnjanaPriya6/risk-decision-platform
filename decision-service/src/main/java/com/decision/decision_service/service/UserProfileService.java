@@ -5,7 +5,8 @@ import com.decision.decision_service.model.dto.DeviceListResponse;
 import com.decision.decision_service.model.dto.DeviceResponse;
 import com.decision.decision_service.model.entity.UserDeviceRegistry;
 import com.decision.decision_service.repository.UserDeviceRegistryRepository;
-import lombok.AllArgsConstructor;
+import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -13,7 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Service
-@AllArgsConstructor
+@RequiredArgsConstructor
 public class UserProfileService {
 
     private final UserDeviceRegistryRepository userDeviceRegistryRepository;
@@ -42,7 +43,8 @@ public class UserProfileService {
                         .deletedAt(list.getDeletedAt())
                         .build());
     }
-    
+
+    @Transactional
     public DeviceResponse trustDeviceCheck(String userId, String deviceId){
         Optional<UserDeviceRegistry> existingDevice = userDeviceRegistryRepository.findByUserIdAndDeviceIdAndDeletedAtIsNull(userId, deviceId);
         if (existingDevice.isEmpty()){
@@ -55,4 +57,16 @@ public class UserProfileService {
         return toDevicesResponse(device);
     }
 
+    @Transactional
+    public DeviceResponse revokeDeviceTrust(String userId, String deviceId){
+        Optional<UserDeviceRegistry> existingDevice = userDeviceRegistryRepository.findByUserIdAndDeviceIdAndDeletedAtIsNull(userId, deviceId);
+        if (existingDevice.isEmpty()){
+            throw new ResourceNotFoundException("No device found for the given userId and deviceId to un-trust");
+        }
+        UserDeviceRegistry device = existingDevice.get();
+        device.setIsTrusted(false);
+        device.setTrustRevokedAt(Instant.now());
+        userDeviceRegistryRepository.save(device);
+        return toDevicesResponse(device);
+    }
 }

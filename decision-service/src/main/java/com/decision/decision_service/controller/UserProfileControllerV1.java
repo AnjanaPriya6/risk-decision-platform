@@ -8,11 +8,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/v1/users/")
+@RequestMapping("/v1/users")
 @AllArgsConstructor
 public class UserProfileControllerV1 {
 
-    public final UserProfileService userProfileService;
+    private final UserProfileService userProfileService;
 
     @GetMapping("{userId}/devices")
     public ResponseEntity<DeviceListResponse> getDevices(
@@ -21,12 +21,21 @@ public class UserProfileControllerV1 {
         return ResponseEntity.ok(response);
     }
 
-    @PostMapping("/{userId}/devices/{deviceId}/trust")
+    @PostMapping("{userId}/devices/{deviceId}/trust")
     public ResponseEntity<DeviceResponse> trustDevice(
-            @PathVariable String userId,
-            @PathVariable String deviceId
+            @PathVariable(name="userId") String userId,
+            @PathVariable(name="deviceId") String deviceId
     ){
         DeviceResponse response = userProfileService.trustDeviceCheck(userId,deviceId);
+        return ResponseEntity.ok(response);
+    }
+
+    @DeleteMapping("{userId}/devices/{deviceId}/trust")
+    public ResponseEntity<DeviceResponse> unTrustDevice(
+            @PathVariable(name="userId") String userId,
+            @PathVariable(name="deviceId") String deviceId
+    ){
+        DeviceResponse response = userProfileService.revokeDeviceTrust(userId,deviceId);
         return ResponseEntity.ok(response);
     }
 
