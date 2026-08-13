@@ -1,19 +1,22 @@
 package com.decision.decision_service.service;
 
+import com.decision.decision_service.exception.ResourceNotFoundException;
 import com.decision.decision_service.model.dto.DeviceListResponse;
 import com.decision.decision_service.model.dto.DeviceResponse;
 import com.decision.decision_service.model.entity.UserDeviceRegistry;
 import com.decision.decision_service.repository.UserDeviceRegistryRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 @Service
+@AllArgsConstructor
 public class UserProfileService {
 
-    @Autowired
-    UserDeviceRegistryRepository userDeviceRegistryRepository;
+    private final UserDeviceRegistryRepository userDeviceRegistryRepository;
 
     public DeviceListResponse getUserDevices(String userId){
         List<UserDeviceRegistry> listOfDevices = userDeviceRegistryRepository.findByUserIdAndDeletedAtIsNullOrderByLastSeenDesc(userId);
@@ -27,7 +30,7 @@ public class UserProfileService {
                 .build();
     }
 
-    public DeviceResponse toDevicesResponse(UserDeviceRegistry list){
+    private DeviceResponse toDevicesResponse(UserDeviceRegistry list){
         return (DeviceResponse.builder()
                         .deviceId(list.getDeviceId())
                         .firstSeen(list.getFirstSeen())
@@ -38,6 +41,18 @@ public class UserProfileService {
                         .trustRevokedAt(list.getTrustRevokedAt())
                         .deletedAt(list.getDeletedAt())
                         .build());
+    }
+    
+    public DeviceResponse trustDeviceCheck(String userId, String deviceId){
+        Optional<UserDeviceRegistry> existingDevice = userDeviceRegistryRepository.findByUserIdAndDeviceIdAndDeletedAtIsNull(userId, deviceId);
+        if (existingDevice.isEmpty()){
+            throw new ResourceNotFoundException("No device found for the given userId and deviceId to trust");
+        }
+        UserDeviceRegistry device = existingDevice.get();
+        device.setIsTrusted(true);
+        device.setTrustedAt(Instant.now());
+        userDeviceRegistryRepository.save(device);
+        return toDevicesResponse(device);
     }
 
 }
