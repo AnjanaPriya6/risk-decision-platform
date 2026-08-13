@@ -2,6 +2,7 @@ package com.decision.decision_service.controller;
 
 import com.decision.decision_service.model.dto.DeviceListResponse;
 import com.decision.decision_service.model.dto.DeviceResponse;
+import com.decision.decision_service.model.dto.SoftDeleteResponseDto;
 import com.decision.decision_service.service.UserProfileService;
 import lombok.AllArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -39,4 +40,12 @@ public class UserProfileControllerV1 {
         return ResponseEntity.ok(response);
     }
 
+    @DeleteMapping("{userId}/devices/{deviceId}")
+    public ResponseEntity<SoftDeleteResponseDto> softDeleteDevice(
+            @PathVariable(name="userId") String userId,
+            @PathVariable(name="deviceId") String deviceId
+    ){
+        SoftDeleteResponseDto response = userProfileService.softDelete(userId,deviceId);
+        return ResponseEntity.ok(response);
+    }
 }

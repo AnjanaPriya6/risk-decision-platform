@@ -3,6 +3,7 @@ package com.decision.decision_service.service;
 import com.decision.decision_service.exception.ResourceNotFoundException;
 import com.decision.decision_service.model.dto.DeviceListResponse;
 import com.decision.decision_service.model.dto.DeviceResponse;
+import com.decision.decision_service.model.dto.SoftDeleteResponseDto;
 import com.decision.decision_service.model.entity.UserDeviceRegistry;
 import com.decision.decision_service.repository.UserDeviceRegistryRepository;
 import jakarta.transaction.Transactional;
@@ -31,17 +32,25 @@ public class UserProfileService {
                 .build();
     }
 
-    private DeviceResponse toDevicesResponse(UserDeviceRegistry list){
+    private DeviceResponse toDevicesResponse(UserDeviceRegistry device){
         return (DeviceResponse.builder()
-                        .deviceId(list.getDeviceId())
-                        .firstSeen(list.getFirstSeen())
-                        .lastSeen(list.getLastSeen())
-                        .loginCount(list.getLoginCount())
-                        .isTrusted(list.getIsTrusted())
-                        .trustedAt(list.getTrustedAt())
-                        .trustRevokedAt(list.getTrustRevokedAt())
-                        .deletedAt(list.getDeletedAt())
+                        .deviceId(device.getDeviceId())
+                        .firstSeen(device.getFirstSeen())
+                        .lastSeen(device.getLastSeen())
+                        .loginCount(device.getLoginCount())
+                        .isTrusted(device.getIsTrusted())
+                        .trustedAt(device.getTrustedAt())
+                        .trustRevokedAt(device.getTrustRevokedAt())
+                        .deletedAt(device.getDeletedAt())
                         .build());
+    }
+
+    private SoftDeleteResponseDto toSoftDeleteDto(UserDeviceRegistry device){
+        return SoftDeleteResponseDto.builder()
+                .userId(device.getUserId())
+                .deviceId(device.getDeviceId())
+                .deletedAt(device.getDeletedAt())
+                .build();
     }
 
     @Transactional
@@ -68,5 +77,17 @@ public class UserProfileService {
         device.setTrustRevokedAt(Instant.now());
         userDeviceRegistryRepository.save(device);
         return toDevicesResponse(device);
+    }
+
+    @Transactional
+    public SoftDeleteResponseDto softDelete(String userId, String deviceId){
+        Optional<UserDeviceRegistry> existingDevice = userDeviceRegistryRepository.findByUserIdAndDeviceIdAndDeletedAtIsNull(userId, deviceId);
+        if (existingDevice.isEmpty()){
+            throw new ResourceNotFoundException("No device found for the given userId and deviceId to delete");
+        }
+        UserDeviceRegistry device = existingDevice.get();
+        device.setDeletedAt(Instant.now());
+        userDeviceRegistryRepository.save(device);
+        return toSoftDeleteDto(device);
     }
 }
